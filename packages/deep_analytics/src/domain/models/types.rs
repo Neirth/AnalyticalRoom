@@ -133,7 +133,7 @@ pub struct TreeVisualization {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeMetadata {
     pub tree_id: String,
-    pub complexity: u8,
+    pub complexity: i64,
     pub config: TreeConfig,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub status: String,
@@ -141,7 +141,7 @@ pub struct TreeMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeDistributions {
-    pub confidence_distribution: HashMap<u8, usize>,
+    pub confidence_distribution: HashMap<i64, usize>,
     pub depth_distribution: HashMap<u32, usize>,
     pub probability_distribution: Vec<f64>,
 }
@@ -152,7 +152,7 @@ pub struct ActivePath {
     pub leaf_id: String,
     pub premise: String,
     pub probability: f64,
-    pub confidence: u8,
+    pub confidence: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ pub struct NodeVisualization {
     pub parent_id: Option<String>,
     pub is_leaf: bool,
     pub can_expand: bool,
-    pub confidence: u8,
+    pub confidence: i64,
     pub status: NodeStatus,
 }
 
@@ -199,7 +199,7 @@ pub struct TreeStatsSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTreeRequest {
     pub premise: String,
-    pub complexity: u8,
+    pub complexity: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,7 +208,7 @@ pub struct AddLeafRequest {
     pub premise: String,
     pub reasoning: String,
     pub probability: f64,
-    pub confidence: u8,
+    pub confidence: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

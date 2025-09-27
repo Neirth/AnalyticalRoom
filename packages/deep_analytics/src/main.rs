@@ -90,6 +90,7 @@ async fn async_main() -> anyhow::Result<()> {
             tokio::signal::ctrl_c().await.unwrap();
             println!("\n⚠️  Graceful shutdown signal received...");
             println!("✅ Server shutdown complete");
+            std::process::exit(0);
         })
         .await;
 

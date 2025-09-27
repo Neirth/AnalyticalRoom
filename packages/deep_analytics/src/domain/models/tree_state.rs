@@ -16,15 +16,15 @@ pub struct TreeState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreeConfig {
     pub root_id: Option<RecordId>,
-    pub max_depth: u8,
+    pub max_depth: i64,
     pub min_probability: f64,
     pub branch_limit: usize,
     pub use_laplace: bool,
-    pub complexity: u8,
+    pub complexity: i64,
 }
 
 impl TreeState {
-    pub fn new(tree_id: String, complexity: u8) -> Self {
+    pub fn new(tree_id: String, complexity: i64) -> Self {
         Self {
             id: None,
             tree_id,
@@ -43,7 +43,7 @@ impl TreeState {
 }
 
 impl TreeConfig {
-    pub fn new(complexity: u8) -> Self {
+    pub fn new(complexity: i64) -> Self {
         let (max_depth, branch_limit) = match complexity {
             1..=2 => (3, 3),
             3..=4 => (4, 4),

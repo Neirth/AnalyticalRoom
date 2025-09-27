@@ -9,12 +9,12 @@ pub struct TreeNode {
     pub premise: String,
     pub reasoning: String,
     pub probability: f64,
-    pub confidence: u8,
+    pub confidence: i64,
     pub parent_id: Option<RecordId>,
     pub children: Vec<RecordId>,
     pub node_type: NodeType,
     pub is_invalidated: bool,
-    pub depth: u8,
+    pub depth: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub metadata: HashMap<String, String>,
 }
@@ -27,7 +27,7 @@ pub enum NodeType {
 }
 
 impl TreeNode {
-    pub fn new_root(premise: String, complexity: u8) -> Self {
+    pub fn new_root(premise: String, complexity: i64) -> Self {
         Self {
             id: None,
             premise,
@@ -52,9 +52,9 @@ impl TreeNode {
         premise: String,
         reasoning: String,
         probability: f64,
-        confidence: u8,
+        confidence: i64,
         parent_id: RecordId,
-        depth: u8,
+        depth: i64,
     ) -> Self {
         Self {
             id: None,

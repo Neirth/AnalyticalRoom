@@ -89,7 +89,7 @@ impl TreeEngineService {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn initialize_with_tree(&mut self, tree_id: String, complexity: u8) -> TreeResult<()> {
+    pub async fn initialize_with_tree(&mut self, tree_id: String, complexity: i64) -> TreeResult<()> {
         let tree_state = TreeState::new(tree_id, complexity);
         let _: Option<TreeState> = self.db.upsert(("tree_state", &self.instance_id)).content(tree_state).await?;
         Ok(())
@@ -193,7 +193,7 @@ impl TreeEngineService {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn create_tree(&mut self, premise: String, complexity: u8) -> TreeResult<String> {
+    pub async fn create_tree(&mut self, premise: String, complexity: i64) -> TreeResult<String> {
         if !(1..=10).contains(&complexity) {
             return Err(TreeEngineError::InvalidInput("complexity".to_string(), "Complexity must be between 1 and 10".to_string()));
         }
@@ -277,7 +277,7 @@ impl TreeEngineService {
         premise: String,
         reasoning: String,
         probability: f64,
-        confidence: u8,
+        confidence: i64,
     ) -> TreeResult<String> {
         // Validations
         if premise.trim().is_empty() {
@@ -314,6 +314,39 @@ impl TreeEngineService {
         // Check depth limit - the new child would have depth = parent_node.depth + 1
         if parent_node.depth + 1 >= tree_state.config.max_depth {
             return Err(TreeEngineError::OperationNotAllowed(format!("Maximum depth {} reached", tree_state.config.max_depth)));
+        }
+
+        // Validate probability sum constraint - existing siblings + new probability must not exceed parent's probability
+        if let Some(parent_probability) = Some(parent_node.probability) {
+            // Get all existing children of the parent
+            let existing_children: Vec<TreeNode> = if !parent_node.children.is_empty() {
+                let mut children = Vec::new();
+                for child_id in &parent_node.children {
+                    if let Some(child_node) = self.db.select::<Option<TreeNode>>(child_id).await? {
+                        children.push(child_node);
+                    }
+                }
+                children
+            } else {
+                Vec::new()
+            };
+
+            // Calculate sum of existing siblings' probabilities
+            let existing_probability_sum: f64 = existing_children.iter().map(|child| child.probability).sum();
+
+            // Check if adding new probability would exceed parent's probability
+            let total_probability_after_addition = existing_probability_sum + probability;
+            if total_probability_after_addition > parent_probability + 0.001 { // Allow small floating point tolerance
+                return Err(TreeEngineError::OperationNotAllowed(
+                    format!(
+                        "Probability constraint violation: Adding leaf with probability {:.3} would result in total child probability {:.3}, which exceeds parent probability {:.3}. Existing siblings sum to {:.3}.",
+                        probability,
+                        total_probability_after_addition,
+                        parent_probability,
+                        existing_probability_sum
+                    )
+                ));
+            }
         }
 
         let new_leaf = TreeNode::new_leaf(premise, reasoning, probability, confidence, parent_record_id.clone(), parent_node.depth + 1);
@@ -1846,10 +1879,10 @@ mod tests {
         let premise = "Root for leaf prune test".to_string();
         let root_id = service.create_tree(premise, 5).await.unwrap();
 
-        // Add multiple leafs
-        let _leaf1 = service.add_leaf("Leaf 1".to_string(), "Reasoning".to_string(), 0.9, 8).await.unwrap();
-        let _leaf2 = service.add_leaf("Leaf 2".to_string(), "Reasoning".to_string(), 0.7, 7).await.unwrap();
-        let _leaf3 = service.add_leaf("Leaf 3".to_string(), "Reasoning".to_string(), 0.5, 5).await.unwrap();
+        // Add multiple leafs that sum within 1.0
+        let _leaf1 = service.add_leaf("Leaf 1".to_string(), "Reasoning".to_string(), 0.5, 8).await.unwrap();
+        let _leaf2 = service.add_leaf("Leaf 2".to_string(), "Reasoning".to_string(), 0.3, 7).await.unwrap();
+        let _leaf3 = service.add_leaf("Leaf 3".to_string(), "Reasoning".to_string(), 0.15, 5).await.unwrap();
 
         // Prune to keep only 2 leafs
         let result = service.prune_leafs(2).await;
@@ -1887,9 +1920,9 @@ mod tests {
         let premise = "Root for balance test".to_string();
         let root_id = service.create_tree(premise, 5).await.unwrap();
 
-        // Add leafs with high probabilities
-        let _leaf1 = service.add_leaf("High prob 1".to_string(), "Reasoning".to_string(), 0.95, 9).await.unwrap();
-        let _leaf2 = service.add_leaf("High prob 2".to_string(), "Reasoning".to_string(), 0.92, 8).await.unwrap();
+        // Add leafs with high probabilities that sum within 1.0
+        let _leaf1 = service.add_leaf("High prob 1".to_string(), "Reasoning".to_string(), 0.6, 9).await.unwrap();
+        let _leaf2 = service.add_leaf("High prob 2".to_string(), "Reasoning".to_string(), 0.35, 8).await.unwrap();
 
         let result = service.balance_leafs(UncertaintyType::InsufficientData).await;
         assert!(result.is_ok());
@@ -2258,6 +2291,124 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_add_leaf_probability_sum_constraint() {
+        let db = Surreal::new::<surrealdb::engine::local::Mem>(())
+                .await
+                .unwrap();
+
+        db.use_ns("analytics").use_db("trees").await.unwrap();
+
+        let mut service = TreeEngineService::new(Arc::new(db));
+
+        // Create tree with root (default probability 1.0)
+        let premise = "Root premise for probability sum test".to_string();
+        let root_id = service.create_tree(premise, 5).await.unwrap();
+
+        // Add first child with probability 0.6
+        let result1 = service.add_leaf(
+            "First child".to_string(),
+            "First child reasoning".to_string(),
+            0.6,
+            7
+        ).await;
+        assert!(result1.is_ok());
+
+        // Add second child with probability 0.3 (total = 0.9, within parent's 1.0)
+        let result2 = service.add_leaf(
+            "Second child".to_string(),
+            "Second child reasoning".to_string(),
+            0.3,
+            6
+        ).await;
+        assert!(result2.is_ok());
+
+        // Try to add third child with probability 0.2 (total would be 1.1, exceeds parent's 1.0)
+        let result3 = service.add_leaf(
+            "Third child".to_string(),
+            "Third child reasoning".to_string(),
+            0.2,
+            5
+        ).await;
+
+        // This should fail due to probability constraint violation
+        assert!(result3.is_err());
+        if let Err(TreeEngineError::OperationNotAllowed(msg)) = result3 {
+            assert!(msg.contains("Probability constraint violation"));
+            assert!(msg.contains("would result in total child probability"));
+            assert!(msg.contains("exceeds parent probability"));
+        } else {
+            panic!("Expected OperationNotAllowed error with probability constraint violation message");
+        }
+
+        // Verify that we can still add a child with a smaller probability that fits
+        let result4 = service.add_leaf(
+            "Fourth child".to_string(),
+            "Fourth child reasoning".to_string(),
+            0.1, // Total would be 1.0, exactly equal to parent
+            4
+        ).await;
+        assert!(result4.is_ok());
+
+        // Try to add any more children (even with small probability) should fail
+        let result5 = service.add_leaf(
+            "Fifth child".to_string(),
+            "Fifth child reasoning".to_string(),
+            0.01, // Total would be 1.01, exceeds parent's 1.0 beyond tolerance
+            3
+        ).await;
+        assert!(result5.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_leaf_probability_sum_constraint_with_expand() {
+        let db = Surreal::new::<surrealdb::engine::local::Mem>(())
+                .await
+                .unwrap();
+
+        db.use_ns("analytics").use_db("trees").await.unwrap();
+
+        let mut service = TreeEngineService::new(Arc::new(db));
+
+        // Create tree with default root probability (1.0)
+        let root_id = service.create_tree("Root for expand constraint test".to_string(), 5).await.unwrap();
+
+        // Add child with probability 0.6
+        let child_id = service.add_leaf(
+            "Child to expand".to_string(),
+            "Child reasoning".to_string(),
+            0.6,
+            7
+        ).await.unwrap();
+
+        // Expand this child to work on its children
+        service.expand_leaf(child_id, "Expanding child for deeper analysis".to_string()).await.unwrap();
+
+        // Now the cursor is on the child (probability 0.6)
+        // Add grandchild with probability 0.4 (within 0.6)
+        let result1 = service.add_leaf(
+            "Grandchild 1".to_string(),
+            "First grandchild".to_string(),
+            0.4,
+            6
+        ).await;
+        assert!(result1.is_ok());
+
+        // Try to add another grandchild with probability 0.3 (total would be 0.7, exceeds parent's 0.6)
+        let result2 = service.add_leaf(
+            "Grandchild 2".to_string(),
+            "Second grandchild".to_string(),
+            0.3,
+            5
+        ).await;
+        assert!(result2.is_err());
+        if let Err(TreeEngineError::OperationNotAllowed(msg)) = result2 {
+            assert!(msg.contains("Probability constraint violation"));
+        } else {
+            panic!("Expected OperationNotAllowed error");
+        }
+    }
+
     // Comprehensive edge case tests
 
     #[tokio::test]
@@ -2324,11 +2475,11 @@ mod tests {
         let premise = "Root for mixed probabilities test".to_string();
         let root_id = service.create_tree(premise, 5).await.unwrap();
 
-        // Add two leaves with very different probabilities
+        // Add two leaves with very different probabilities that sum within 1.0
         let high_leaf = service.add_leaf(
             "High confidence leaf".to_string(),
             "Very confident reasoning for balance test".to_string(),
-            0.9,
+            0.7,
             9
         ).await.unwrap();
 
@@ -2495,7 +2646,7 @@ mod tests {
         let _subbranch2 = service.add_leaf(
             "Sub-branch 2.1".to_string(),
             "Sub-branch reasoning under branch 2 for coherence".to_string(),
-            0.4,
+            0.25, // Must be <= branch2's probability of 0.3
             5
         ).await.unwrap();
 
@@ -2525,32 +2676,32 @@ mod tests {
         let level1_1 = service.add_leaf(
             "Level 1 Node 1".to_string(),
             "First level one node reasoning for inspection".to_string(),
-            0.8,
+            0.6,
             8
         ).await.unwrap();
 
         let level1_2 = service.add_leaf(
             "Level 1 Node 2".to_string(),
             "Second level one node reasoning for inspection".to_string(),
-            0.6,
+            0.3,
             6
         ).await.unwrap();
 
         // Navigate to first level 1 node to add children
         service.navigate_to(level1_1).await.unwrap();
 
-        // Add second level under level1_1
+        // Add second level under level1_1 (probability 0.6)
         let _level2_1 = service.add_leaf(
             "Level 2 Node 1".to_string(),
             "Level two node one reasoning for inspection".to_string(),
-            0.7,
+            0.4, // Must be <= level1_1's probability of 0.6
             7
         ).await.unwrap();
 
         let _level2_2 = service.add_leaf(
             "Level 2 Node 2".to_string(),
             "Level two node two reasoning for inspection".to_string(),
-            0.5,
+            0.15, // 0.4 + 0.15 = 0.55 <= 0.6
             5
         ).await.unwrap();
 
@@ -2905,52 +3056,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_coherence_child_probabilities_exceed_sum() {
+    async fn test_add_leaf_prevents_child_probabilities_exceed_sum() {
         let db = Surreal::new::<surrealdb::engine::local::Mem>(())
                 .await
                 .unwrap();
-    
+
         db.use_ns("analytics").use_db("trees").await.unwrap();
 
         let mut service = TreeEngineService::new(Arc::new(db));
         let premise = "Root for child probability sum test".to_string();
         let root_id = service.create_tree(premise, 5).await.unwrap();
 
-        // Create parent node
+        // Create parent node with probability 0.8
         let parent_id = service.add_leaf(
             "Parent for probability sum test".to_string(),
-            "Parent node that will have children with excessive probability sum".to_string(),
+            "Parent node that will test probability constraint".to_string(),
             0.8,
             8
         ).await.unwrap();
 
-        // Add children with probabilities that sum > 1.0 (lines 439-442)
+        // Navigate to parent to add children
+        service.navigate_to(parent_id).await.unwrap();
+
+        // Add first child with probability 0.5 (within 0.8)
         let _child1 = service.add_leaf(
-            "High probability child 1".to_string(),
-            "First child with high probability for sum test".to_string(),
-            0.7, // High probability
+            "First child".to_string(),
+            "First child with moderate probability".to_string(),
+            0.5,
             7
         ).await.unwrap();
 
-        let _child2 = service.add_leaf(
-            "High probability child 2".to_string(),
-            "Second child with high probability for sum test".to_string(),
-            0.6, // 0.7 + 0.6 = 1.3 > 1.0
+        // Try to add second child with probability 0.4 (total would be 0.9 > 0.8)
+        let result2 = service.add_leaf(
+            "Second child".to_string(),
+            "Second child that would exceed parent probability".to_string(),
+            0.4, // 0.5 + 0.4 = 0.9 > 0.8
             6
-        ).await.unwrap();
+        ).await;
 
-        // validate_coherence should detect the probability sum violation
+        // This should fail due to probability constraint validation
+        assert!(result2.is_err());
+        if let Err(TreeEngineError::OperationNotAllowed(msg)) = result2 {
+            assert!(msg.contains("Probability constraint violation"));
+        } else {
+            panic!("Expected OperationNotAllowed error with probability constraint violation");
+        }
+
+        // validate_coherence should pass since no invalid data was added
         let result = service.validate_coherence().await;
         assert!(result.is_ok());
 
         let coherence = result.unwrap();
-        assert!(!coherence.is_coherent);
-        assert!(!coherence.contradictions.is_empty());
-
-        // Should have contradiction about child probabilities summing > 1.0
-        let sum_violation = coherence.contradictions.iter()
-            .any(|c| c.explanation.contains("sum exceeds 1.0"));
-        assert!(sum_violation);
+        assert!(coherence.is_coherent); // Should be coherent since invalid data was prevented
+        assert!(coherence.contradictions.is_empty()); // No contradictions since no invalid data was added
     }
 
     #[tokio::test]
@@ -2965,26 +3123,29 @@ mod tests {
         let premise = "Root for mixed violations test".to_string();
         let root_id = service.create_tree(premise, 5).await.unwrap();
 
-        // Create scenario with both violations AND contradictions to test suggestions (lines 452-456)
+        // Create scenario with valid probabilities for coherence testing
         let parent_id = service.add_leaf(
             "Parent for mixed violations".to_string(),
-            "Parent node for testing mixed violations and contradictions".to_string(),
+            "Parent node for testing coherence validation".to_string(),
             0.9,
             9
         ).await.unwrap();
 
-        // Add children that sum > 1.0 (contradiction)
+        // Navigate to parent to add children
+        service.navigate_to(parent_id).await.unwrap();
+
+        // Add children that sum within parent's probability
         let _child1 = service.add_leaf(
-            "Child with excessive sum 1".to_string(),
-            "Child one for mixed violation test".to_string(),
-            0.8,
+            "Child 1".to_string(),
+            "Child one for coherence test".to_string(),
+            0.5,
             8
         ).await.unwrap();
 
         let _child2 = service.add_leaf(
-            "Child with excessive sum 2".to_string(),
-            "Child two for mixed violation test".to_string(),
-            0.7, // 0.8 + 0.7 = 1.5 > 1.0
+            "Child 2".to_string(),
+            "Child two for coherence test".to_string(),
+            0.3, // 0.5 + 0.3 = 0.8 < 0.9 (valid)
             7
         ).await.unwrap();
 
@@ -3012,13 +3173,11 @@ mod tests {
         let coherence = result.unwrap();
         assert!(!coherence.is_coherent);
 
-        // Should have both violations and contradictions, leading to specific suggestions
-        assert!(!coherence.contradictions.is_empty());
+        // Should have violations from the manually inserted invalid node
+        // (No probability sum contradictions since valid data was added through add_leaf)
 
-        // Check for the specific contradiction about probability sum
-        let has_sum_contradiction = coherence.contradictions.iter()
-            .any(|c| c.explanation == "Child probabilities sum exceeds 1.0");
-        assert!(has_sum_contradiction);
+        // The only contradiction should be from the manually inserted node with invalid confidence
+        // No probability sum violations since we used add_leaf which enforces constraints
     }
 
     #[tokio::test]
