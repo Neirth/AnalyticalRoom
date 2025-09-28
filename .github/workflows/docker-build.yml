@@ -1,5 +1,7 @@
 name: Build and Publish Docker Images
 
+concurrency: production
+
 on:
   push:
     branches:
