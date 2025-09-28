@@ -5,12 +5,10 @@ on:
     branches:
       - main
       - master
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - main
-      - master
+    paths:
+      - '**.rs'
+      - 'packages/**/.docker/Dockerfile'
+
   workflow_dispatch:
     inputs:
       package:
@@ -73,14 +71,22 @@ jobs:
           echo "packages-json=$packages_json" >> $GITHUB_OUTPUT
 
   build:
-    name: Build ${{ matrix.package }}
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.package }} [${{ matrix.arch }}]
     needs: detect-packages
+    runs-on: ${{ matrix.runner }}
     if: needs.detect-packages.outputs.packages != ''
     strategy:
       fail-fast: false
       matrix:
         package: ${{ fromJson(needs.detect-packages.outputs.packages-json) }}
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
 
     permissions:
       contents: read
@@ -144,7 +150,7 @@ jobs:
         with:
           context: .
           file: packages/${{ matrix.package }}/.docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -252,6 +258,28 @@ jobs:
         with:
           sarif_file: trivy-results-${{ matrix.package }}.sarif
           category: trivy-${{ matrix.package }}
+
+  deploy-into-infra:
+    name: Deploy into Infrastructure
+    runs-on: ubuntu-latest
+
+    needs: [detect-packages, build, test-images, security-scan]
+    if: needs.detect-packages.outputs.packages != ''
+
+    steps:
+      - name: Deploy to production 'deep_analytics'
+        uses: johnbeynon/render-deploy-action@v0.0.8
+        if: contains(needs.detect-packages.outputs.packages, 'deep_analytics')
+        with:
+          service-id: ${{ secrets.DEEP_ANALYTICS_SERVICE_ID }}
+          api-key: ${{ secrets.RENDER_API_KEY }}
+
+      - name: Deploy to production 'logical_engine'
+        uses: johnbeynon/render-deploy-action@v0.0.8
+        if: contains(needs.detect-packages.outputs.packages, 'logical_engine')
+        with:
+          service-id: ${{ secrets.LOGICAL_ENGINE_SERVICE_ID }}
+          api-key: ${{ secrets.RENDER_API_KEY }}
 
   deployment-info:
     name: Deployment Information
