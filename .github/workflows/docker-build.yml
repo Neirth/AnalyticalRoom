@@ -150,7 +150,6 @@ jobs:
         with:
           context: .
           file: packages/${{ matrix.package }}/.docker/Dockerfile
-          platforms: ${{ matrix.platform }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -160,7 +159,7 @@ jobs:
       - name: Export digest
         if: steps.should-build.outputs.should_build == 'true'
         run: |
-          echo "${{ matrix.arch }}=${{ steps.build.outputs.digest }}" >> $GITHUB_OUTPUT
+          echo "${{ matrix.arch }}=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ steps.meta.outputs.tags }})" >> $GITHUB_OUTPUT
 
   publish-manifest:
     runs-on: ubuntu-latest
