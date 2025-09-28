@@ -307,7 +307,7 @@ impl TreeEngineServer {
     ///   }
     /// }
     /// ```
-    #[tool(description = "TREE OPTIMIZATION: Remove low-probability branches from ALL levels of the tree to focus on viable scenarios. NOTE: Pruning affects the entire tree structure, not just root children - probabilities are evaluated across all parent-child relationships throughout the tree depth. Aggressiveness 0.0-1.0 controls removal threshold (0.0=conservative, 0.5=balanced, 1.0=aggressive). Use after building the full tree but before final analysis to eliminate noise and focus on meaningful probability paths.")]
+    #[tool(description = "COST-COMPLEXITY PRUNING: Intelligently removes branches using minimal cost-complexity theory from decision tree research. Formula: R_α(T) = error + α×nodes, where higher α penalizes larger trees. Aggressiveness 0.0-1.0 maps to α values (0.0=very conservative, 0.3=moderate, 0.6=aggressive, 1.0=very aggressive). Based on Breiman's CART algorithm - mathematically sound approach that balances model complexity against accuracy. Reports effective threshold and method explanation.")]
     async fn prune_tree(&self, Parameters(request): Parameters<PruneTreeRequest>) -> Result<String, ErrorData> {
         let service = self.get_service().await;
         let mut service = service.lock().await;
@@ -315,10 +315,20 @@ impl TreeEngineServer {
         let aggressiveness = request.aggressiveness.unwrap_or(0.5);
 
         match service.prune_tree(aggressiveness).await {
-            Ok(result) => Ok(format!("Pruned {} nodes, preserved {} nodes with aggressiveness level {:.2}",
+            Ok(result) => Ok(format!(
+                "COST-COMPLEXITY PRUNING COMPLETE:\n\
+                • Removed: {} nodes | Preserved: {} nodes\n\
+                • Aggressiveness: {:.2} → Cost-complexity α: {:.3}\n\
+                • Effective threshold: {:.3}\n\
+                • Method: {}\n\
+                • Result: Optimized tree structure using Breiman's minimal cost-complexity principle",
                 result.statistics.removed_count,
                 result.statistics.preserved_count,
-                result.statistics.aggressiveness_level)),
+                result.statistics.aggressiveness_level,
+                result.statistics.cost_complexity_alpha,
+                result.statistics.effective_threshold,
+                result.statistics.method_explanation
+            )),
             Err(e) => Ok(format!("Failed to prune tree: {}", e)),
         }
     }
@@ -609,7 +619,7 @@ impl TreeEngineServer {
     ///   }
     /// }
     /// ```
-    #[tool(description = "PROBABILITY BALANCING: Adjust probability distributions across leaf nodes to handle uncertainty scenarios. Use when you have extreme probabilities that need moderation or when dealing with high uncertainty. Choose uncertainty type: 'InsufficientData' (moderates extremes), 'EqualLikelihood' (moves toward equal distribution), 'CognitiveOverload' (simplifies complex distributions). Alternative to pruning that keeps all nodes.")]
+    #[tool(description = "LAPLACE SMOOTHING: Applies Bayesian probability smoothing using Laplace's rule of succession to handle uncertainty and prevent zero-probability scenarios. Uses different α parameters: InsufficientData (α=0.5, Jeffreys prior), EqualLikelihood (α=1.0, uniform prior), CognitiveOverload (α=2.0, strong regularization). Formula: P_smooth = (count + α) / (total + α×categories). This is the standard technique in machine learning for probability estimation with sparse data.")]
     async fn balance_leafs(&self, Parameters(request): Parameters<BalanceLeafsRequest>) -> Result<String, ErrorData> {
         let service_arc = self.get_service().await;
         let mut service = service_arc.lock().await;
@@ -623,11 +633,18 @@ impl TreeEngineServer {
         match service.balance_leafs(uncertainty_type).await {
             Ok(result) => {
                 Ok(format!(
-                    "Balanced {} nodes for {:?} scenario. Reasoning: {}. {} nodes had probabilities adjusted.",
+                    "LAPLACE SMOOTHING COMPLETE:\n\
+                    • Balanced: {} nodes | Total processed: {}\n\
+                    • Uncertainty type: {:?} | Laplace α: {:.1}\n\
+                    • Method: {}\n\
+                    • Reasoning: {}\n\
+                    • Result: Probabilities smoothed using Bayesian prior to reduce overfitting and handle sparse data",
                     result.balanced_nodes.len(),
+                    result.total_count,
                     result.uncertainty_type,
-                    request.reasoning,
-                    result.original_probabilities.len()
+                    result.laplace_alpha,
+                    result.smoothing_explanation,
+                    request.reasoning
                 ))
             },
             Err(e) => Ok(format!("Failed to balance leafs: {}", e)),

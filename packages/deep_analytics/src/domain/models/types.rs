@@ -87,6 +87,9 @@ pub struct PruningStatistics {
     pub removed_count: usize,
     pub preserved_count: usize,
     pub aggressiveness_level: f64,
+    pub cost_complexity_alpha: f64,
+    pub effective_threshold: f64,
+    pub method_explanation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +98,9 @@ pub struct BalancingResult {
     pub uncertainty_type: UncertaintyType,
     pub original_probabilities: HashMap<String, f64>, // Changed from Uuid to String
     pub new_probabilities: HashMap<String, f64>, // Changed from Uuid to String
+    pub laplace_alpha: f64,
+    pub total_count: usize,
+    pub smoothing_explanation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
