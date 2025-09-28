@@ -53,6 +53,12 @@ pub struct NavigateToRequest {
     pub justification: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BalanceLeafsRequest {
+    pub uncertainty_type: String,
+    pub reasoning: String,
+}
+
 /// TreeEngineServer provides an MCP (Model Context Protocol) interface for the probability tree engine.
 ///
 /// This server acts as the main entry point for MCP clients to interact with the TreeEngineService.
@@ -174,7 +180,7 @@ impl TreeEngineServer {
 
         match service.create_tree(request.premise, request.complexity).await {
             Ok(tree_id) => Ok(format!("Successfully created probability tree with ID: {}", tree_id)),
-            Err(e) => Err(ErrorData::new(ErrorCode::RESOURCE_NOT_FOUND, format!("Failed to create tree: {}", e), None)),
+            Err(e) => Ok(format!("Failed to create tree: {}", e)),
         }
     }
 
@@ -221,7 +227,7 @@ impl TreeEngineServer {
             request.confidence,
         ).await {
             Ok(node_id) => Ok(format!("Successfully added leaf node with ID: {}", node_id)),
-            Err(e) => Err(ErrorData::new(ErrorCode::RESOURCE_NOT_FOUND, format!("Failed to add leaf: {}", e), None)),
+            Err(e) => Ok(format!("Failed to add leaf: {}", e)),
         }
     }
 
@@ -260,20 +266,21 @@ impl TreeEngineServer {
         let node_id = request.node_id.clone();
         match service.expand_leaf(request.node_id, request.rationale).await {
             Ok(_result) => Ok(format!("Successfully expanded leaf. Now working in {}.", node_id)),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to expand leaf: {}", e), None)),
+            Err(e) => Ok(format!("Failed to expand leaf: {}", e)),
         }
     }
 
-    /// MCP Tool: Prunes the probability tree by removing low-probability branches.
+    /// MCP Tool: Prunes the probability tree by removing low-probability branches throughout the entire tree.
     ///
     /// This tool optimizes the tree structure by removing branches with probabilities
-    /// below a calculated threshold based on the aggressiveness parameter. It helps
-    /// focus analysis on the most probable scenarios while maintaining tree coherence.
+    /// below a calculated threshold based on the aggressiveness parameter. IMPORTANT: This operates
+    /// on ALL levels of the tree - not just root children. Each parent-child relationship is evaluated
+    /// independently, so a node may be pruned even if its parent has high probability.
     ///
     /// # MCP Tool Parameters
     /// - `aggressiveness` (optional f64): Pruning aggressiveness level 0.0-1.0 (defaults to 0.5)
     ///   - 0.0 = Very conservative (removes only extremely low probability branches)
-    ///   - 0.5 = Balanced pruning (default)
+    ///   - 0.5 = Balanced pruning (default) - good starting point for most analyses
     ///   - 1.0 = Aggressive pruning (removes more branches, keeps only highest probabilities)
     ///
     /// # Returns
@@ -281,10 +288,12 @@ impl TreeEngineServer {
     /// - Error: "Failed to prune tree: {error_description}"
     ///
     /// # Pruning Logic
-    /// - Calculates threshold based on aggressiveness and tree statistics
+    /// - Evaluates ALL nodes at ALL tree levels, not just root children
+    /// - Calculates threshold based on aggressiveness and global tree statistics
     /// - Preserves critical path nodes regardless of probability
     /// - Maintains tree structural integrity
     /// - Updates parent-child relationships after pruning
+    /// - Removed nodes are permanently deleted from the tree structure
     ///
     /// # Example MCP Request
     /// ```json
@@ -298,7 +307,7 @@ impl TreeEngineServer {
     ///   }
     /// }
     /// ```
-    #[tool(description = "TREE OPTIMIZATION: Remove low-probability branches to focus on viable scenarios. Aggressiveness 0.0-1.0 controls how many branches to remove (0.0=conservative, 0.5=balanced, 1.0=aggressive). Use this after building the full tree but before final analysis to eliminate noise and focus on meaningful probability paths. Maintains structural integrity and updates all relationships.")]
+    #[tool(description = "TREE OPTIMIZATION: Remove low-probability branches from ALL levels of the tree to focus on viable scenarios. NOTE: Pruning affects the entire tree structure, not just root children - probabilities are evaluated across all parent-child relationships throughout the tree depth. Aggressiveness 0.0-1.0 controls removal threshold (0.0=conservative, 0.5=balanced, 1.0=aggressive). Use after building the full tree but before final analysis to eliminate noise and focus on meaningful probability paths.")]
     async fn prune_tree(&self, Parameters(request): Parameters<PruneTreeRequest>) -> Result<String, ErrorData> {
         let service = self.get_service().await;
         let mut service = service.lock().await;
@@ -310,7 +319,7 @@ impl TreeEngineServer {
                 result.statistics.removed_count,
                 result.statistics.preserved_count,
                 result.statistics.aggressiveness_level)),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to prune tree: {}", e), None)),
+            Err(e) => Ok(format!("Failed to prune tree: {}", e)),
         }
     }
 
@@ -371,7 +380,7 @@ impl TreeEngineServer {
 
         match service.export_paths(style, request.insights, request.confidence_assessment).await {
             Ok(result) => Ok(result.to_string()),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to export paths: {}", e), None)),
+            Err(e) => Ok(format!("Failed to export paths: {}", e)),
         }
     }
 
@@ -421,7 +430,7 @@ impl TreeEngineServer {
 
         match service.inspect_tree().await {
             Ok(visualization) => Ok(visualization.to_string()),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to inspect tree: {}", e), None)),
+            Err(e) => Ok(format!("Failed to inspect tree: {}", e)),
         }
     }
 
@@ -465,7 +474,7 @@ impl TreeEngineServer {
                 result.is_coherent,
                 result.contradictions.len(),
                 result.eliminated_nodes.len())),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to validate coherence: {}", e), None)),
+            Err(e) => Ok(format!("Failed to validate coherence: {}", e)),
         }
     }
 
@@ -510,7 +519,7 @@ impl TreeEngineServer {
                 result.is_valid,
                 result.violations.len(),
                 result.suggestions.len())),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to get probability status: {}", e), None)),
+            Err(e) => Ok(format!("Failed to get probability status: {}", e)),
         }
     }
 
@@ -555,7 +564,73 @@ impl TreeEngineServer {
 
         match service.navigate_to(request.node_id.clone()).await {
             Ok(_) => Ok(format!("Successfully navigated to node {}. Ready to add children to this node.", request.node_id)),
-            Err(e) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, format!("Failed to navigate: {}", e), None)),
+            Err(e) => Ok(format!("Failed to navigate: {}", e)),
+        }
+    }
+
+    /// MCP Tool: Balances probability values across leaf nodes to address uncertainty scenarios.
+    ///
+    /// This tool adjusts probability distributions across leaf nodes to handle different types
+    /// of uncertainty without removing nodes. It's useful for scenarios where you have extreme
+    /// probabilities that need moderation or when dealing with uncertainty in your assessments.
+    ///
+    /// # MCP Tool Parameters
+    /// - `uncertainty_type` (string): Type of uncertainty to address:
+    ///   - "InsufficientData": Moderates extreme probabilities when data is limited
+    ///   - "EqualLikelihood": Adjusts probabilities toward equal distribution
+    ///   - "CognitiveOverload": Simplifies complex probability distributions
+    /// - `reasoning` (string): Explanation for why balancing is needed in this scenario
+    ///
+    /// # Returns
+    /// - Success: "Balanced {count} nodes for {uncertainty_type}: {details}"
+    /// - Error: "Failed to balance leafs: {error_description}"
+    ///
+    /// # Balancing Logic
+    /// - InsufficientData: Moderates probabilities > (average + 0.1) down toward average
+    /// - EqualLikelihood: Moves all probabilities toward equal distribution
+    /// - CognitiveOverload: Simplifies extreme values to reduce cognitive burden
+    ///
+    /// # When to Use
+    /// - After building initial tree but before final analysis
+    /// - When you notice extreme probabilities that may be overconfident
+    /// - When dealing with high uncertainty in your assessments
+    /// - As an alternative to pruning when you want to keep all nodes
+    ///
+    /// # Example MCP Request
+    /// ```json
+    /// {
+    ///   "method": "tools/call",
+    ///   "params": {
+    ///     "name": "balance_leafs",
+    ///     "arguments": {
+    ///       "uncertainty_type": "InsufficientData",
+    ///       "reasoning": "Limited market data makes high-confidence probabilities risky"
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    #[tool(description = "PROBABILITY BALANCING: Adjust probability distributions across leaf nodes to handle uncertainty scenarios. Use when you have extreme probabilities that need moderation or when dealing with high uncertainty. Choose uncertainty type: 'InsufficientData' (moderates extremes), 'EqualLikelihood' (moves toward equal distribution), 'CognitiveOverload' (simplifies complex distributions). Alternative to pruning that keeps all nodes.")]
+    async fn balance_leafs(&self, Parameters(request): Parameters<BalanceLeafsRequest>) -> Result<String, ErrorData> {
+        let service_arc = self.get_service().await;
+        let mut service = service_arc.lock().await;
+
+        let uncertainty_type = match request.uncertainty_type.as_str() {
+            "EqualLikelihood" => UncertaintyType::EqualLikelihood,
+            "CognitiveOverload" => UncertaintyType::CognitiveOverload,
+            _ => UncertaintyType::InsufficientData, // Default
+        };
+
+        match service.balance_leafs(uncertainty_type).await {
+            Ok(result) => {
+                Ok(format!(
+                    "Balanced {} nodes for {:?} scenario. Reasoning: {}. {} nodes had probabilities adjusted.",
+                    result.balanced_nodes.len(),
+                    result.uncertainty_type,
+                    request.reasoning,
+                    result.original_probabilities.len()
+                ))
+            },
+            Err(e) => Ok(format!("Failed to balance leafs: {}", e)),
         }
     }
 }
@@ -587,7 +662,9 @@ impl ServerHandler for TreeEngineServer {
                 2. **add_leaf(premise, reasoning, probability, confidence)** - Add root's children\n\
                    - IMMEDIATELY after create_tree, add 2-4 initial branches to root\n\
                    - Each branch represents a major pathway/outcome\n\
-                   - Probability: 0.0-1.0 (siblings should roughly sum to 1.0)\n\
+                   - Probability: 0.0-1.0 (CRITICAL: siblings must NOT exceed parent's probability)\n\
+                   - For root children: total can approach 1.0 but should not exceed it\n\
+                   - For deeper levels: children's probabilities are constrained by parent's probability\n\
                    - Confidence: 1-10 (higher = more certain about assessment)\n\
                    - Reasoning must be detailed and specific\n\n\
                 3. **expand_leaf(node_id, rationale)** - Prepare node for children\n\
@@ -609,10 +686,20 @@ impl ServerHandler for TreeEngineServer {
                    - Checks probability ranges and relationships\n\
                    - MANDATORY before pruning or final analysis\n\n\
                 ### Phase 4: OPTIMIZATION (Refinement)\n\
-                8. **prune_tree(aggressiveness)** - Remove weak branches\n\
+                8. **prune_tree(aggressiveness)** OR **balance_leafs(uncertainty_type, reasoning)**\n\
+                   \n\
+                   **Option A: prune_tree(aggressiveness)** - Remove weak branches permanently\n\
                    - 0.0-0.3: Conservative (keep most branches)\n\
-                   - 0.4-0.6: Balanced (recommended)\n\
+                   - 0.4-0.6: Balanced (recommended for most cases)\n\
                    - 0.7-1.0: Aggressive (keep only strongest paths)\n\
+                   - Operates on ALL tree levels, not just root children\n\
+                   - Use when you want to eliminate unlikely scenarios\n\
+                   \n\
+                   **Option B: balance_leafs(uncertainty_type, reasoning)** - Adjust probabilities without removing nodes\n\
+                   - 'InsufficientData': Moderate extreme probabilities when data is limited\n\
+                   - 'EqualLikelihood': Move toward equal distribution when unsure\n\
+                   - 'CognitiveOverload': Simplify complex distributions\n\
+                   - Use when you want to keep all scenarios but adjust confidence\n\
                    - Use ONLY after validation passes\n\n\
                 ### Phase 5: OUTPUT (Final Analysis)\n\
                 9. **export_paths(style, insights, confidence)** - Generate final report\n\
@@ -625,8 +712,16 @@ impl ServerHandler for TreeEngineServer {
                 ⚠️  NEVER skip create_tree - it's mandatory first step\n\
                 ⚠️  NEVER add children without expand_leaf (except for root's children)\n\
                 ⚠️  ALWAYS save node_ids from responses for expand_leaf\n\
-                ⚠️  NEVER prune before validation (coherence + probability checks)\n\
-                ⚠️  ALWAYS validate before export\n\n\
+                ⚠️  NEVER exceed parent probability when adding children (system enforces this)\n\
+                ⚠️  NEVER prune/balance before validation (coherence + probability checks)\n\
+                ⚠️  ALWAYS validate before export\n\
+                ⚠️  QUANTIFY your leaf strategy: decide how many children each branch needs BEFORE adding\n\n\
+                ## PROBABILITY CONSTRAINT SYSTEM:\n\
+                - **Hierarchical Constraint**: Children's probabilities cannot exceed parent's probability\n\
+                - **Root Level**: Children can sum up to 1.0 (root probability = 1.0)\n\
+                - **Deeper Levels**: If parent has probability 0.6, children can sum up to 0.6\n\
+                - **Auto-Validation**: System prevents violations immediately, no post-hoc fixes needed\n\
+                - **Planning Strategy**: Before adding children, calculate how to distribute parent's probability\n\n\
                 ## CURSOR SYSTEM EXPLANATION:\n\
                 - Cursor determines WHERE add_leaf places new nodes\n\
                 - create_tree sets cursor to root\n\
@@ -667,9 +762,18 @@ impl ServerHandler for TreeEngineServer {
                 - **inspect_tree**: Frequently during building to monitor progress\n\
                 - **validate_coherence**: Before optimization, to check logical consistency\n\
                 - **probability_status**: Before optimization, to check mathematical validity\n\
-                - **prune_tree**: After validation, to remove weak branches\n\
+                - **prune_tree**: After validation, to remove weak branches permanently\n\
+                - **balance_leafs**: After validation, to adjust probabilities without removing nodes\n\
                 - **export_paths**: Final step, to generate analysis report\n\
-                - **navigate_to**: Advanced cursor control for non-linear building"
+                - **navigate_to**: Advanced cursor control for non-linear building\n\n\
+                ## QUANTIFICATION STRATEGY (Plan Before Building):\n\
+                1. **Root Level Planning**: Decide how many major branches (2-5 recommended)\n\
+                2. **Probability Budget**: Allocate probability budget across branches before adding\n\
+                3. **Depth Strategy**: Plan maximum depth (2-4 levels typical)\n\
+                4. **Child Distribution**: For each branch, decide child count before expanding\n\
+                5. **Validation Points**: Use inspect_tree frequently to monitor structure\n\
+                \n\
+                Example Planning: 'I need 3 root branches (0.5, 0.3, 0.2), then expand the 0.5 branch into 2 children (0.3, 0.2)'"
                     .to_string(),
             ),
         }
