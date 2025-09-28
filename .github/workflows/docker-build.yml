@@ -1,0 +1,299 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Specific package to build (optional)'
+        required: false
+        type: string
+      tag:
+        description: 'Custom tag for the image'
+        required: false
+        type: string
+        default: 'latest'
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: neirth
+
+jobs:
+  detect-packages:
+    name: Detect packages with Docker support
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.detect.outputs.packages }}
+      packages-json: ${{ steps.detect.outputs.packages-json }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect packages with Dockerfiles
+        id: detect
+        run: |
+          echo "🔍 Detecting packages with Docker support..."
+
+          packages=()
+          packages_json="["
+
+          for package_dir in packages/*/; do
+            if [ -d "$package_dir" ]; then
+              package_name=$(basename "$package_dir")
+              dockerfile_path="$package_dir.docker/Dockerfile"
+
+              if [ -f "$dockerfile_path" ]; then
+                echo "✅ Found package with Docker support: $package_name"
+                packages+=("$package_name")
+
+                # Add to JSON array
+                if [ ${#packages[@]} -gt 1 ]; then
+                  packages_json+=","
+                fi
+                packages_json+="\"$package_name\""
+              else
+                echo "⏭️  Skipping $package_name (no Dockerfile found)"
+              fi
+            fi
+          done
+
+          packages_json+="]"
+
+          echo "📦 Detected packages: ${packages[*]}"
+          echo "packages=${packages[*]}" >> $GITHUB_OUTPUT
+          echo "packages-json=$packages_json" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    needs: detect-packages
+    if: needs.detect-packages.outputs.packages != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.detect-packages.outputs.packages-json) }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.package }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.package }}
+            org.opencontainers.image.description=AnalyticalRoom ${{ matrix.package }} package
+            org.opencontainers.image.vendor=Neirth
+            org.opencontainers.image.source=https://github.com/Neirth/AnalyticalRoom
+
+      - name: Check if package should be built
+        id: should-build
+        run: |
+          # If specific package is requested via workflow_dispatch, only build that package
+          if [ "${{ github.event.inputs.package }}" != "" ]; then
+            if [ "${{ github.event.inputs.package }}" = "${{ matrix.package }}" ]; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "📦 Building requested package: ${{ matrix.package }}"
+            else
+              echo "should_build=false" >> $GITHUB_OUTPUT
+              echo "⏭️  Skipping ${{ matrix.package }} (not requested)"
+            fi
+          else
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "📦 Building package: ${{ matrix.package }}"
+          fi
+
+      - name: Build and push Docker image
+        if: steps.should-build.outputs.should_build == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: packages/${{ matrix.package }}/.docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate build summary
+        if: steps.should-build.outputs.should_build == 'true'
+        run: |
+          echo "## 🐳 Docker Build Summary - ${{ matrix.package }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Build Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package**: \`${{ matrix.package }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dockerfile**: \`packages/${{ matrix.package }}/.docker/Dockerfile\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platforms**: \`linux/amd64, linux/arm64\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: \`${{ env.REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🏷️ Generated Tags" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.meta.outputs.tags }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Pull Command" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.package }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  test-images:
+    name: Test Docker Images
+    runs-on: ubuntu-latest
+    needs: [detect-packages, build]
+    if: needs.detect-packages.outputs.packages != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.detect-packages.outputs.packages-json) }}
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test Docker image
+        run: |
+          echo "🧪 Testing Docker image for ${{ matrix.package }}"
+
+          # Determine the tag to test
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+          elif [ "${{ github.event.inputs.tag }}" != "" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="latest"
+          fi
+
+          image="${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.package }}:${tag}"
+
+          echo "📥 Pulling image: $image"
+          docker pull "$image"
+
+          echo "🔍 Inspecting image..."
+          docker inspect "$image"
+
+          echo "📋 Image layers:"
+          docker history "$image" --no-trunc
+
+          echo "✅ Image test completed for ${{ matrix.package }}"
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [detect-packages, build]
+    if: needs.detect-packages.outputs.packages != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.detect-packages.outputs.packages-json) }}
+
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ matrix.package }}:latest
+          format: sarif
+          output: trivy-results-${{ matrix.package }}.sarif
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results-${{ matrix.package }}.sarif
+          category: trivy-${{ matrix.package }}
+
+  deployment-info:
+    name: Deployment Information
+    runs-on: ubuntu-latest
+    needs: [detect-packages, build, test-images]
+    if: needs.detect-packages.outputs.packages != ''
+
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Built Packages" >> $GITHUB_STEP_SUMMARY
+
+          packages="${{ needs.detect-packages.outputs.packages }}"
+          for package in $packages; do
+            echo "- **$package**: \`${{ env.REGISTRY }}/${{ env.OWNER }}/$package:latest\`" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 Usage Examples" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          for package in $packages; do
+            echo "#### $package" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "# Pull the image" >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.OWNER }}/$package:latest" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "# Run the container" >> $GITHUB_STEP_SUMMARY
+            echo "docker run -p 8080:8080 ${{ env.REGISTRY }}/${{ env.OWNER }}/$package:latest" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "### 📋 Registry Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry**: GitHub Container Registry (\`ghcr.io\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: \`${{ env.OWNER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Visibility**: Package visibility follows repository settings" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architectures**: \`linux/amd64\`, \`linux/arm64\`" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [GitHub Packages](${{ github.server_url }}/${{ github.repository }}/pkgs/container)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Repository](${{ github.server_url }}/${{ github.repository }})" >> $GITHUB_STEP_SUMMARY
