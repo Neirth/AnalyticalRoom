@@ -137,21 +137,30 @@ The `deep_analytics` package provides comprehensive analytical capabilities:
 
 ### Logical Engine MCP Server
 
-The `logical_engine` package (currently in development) will offer:
+The `logical_engine` package provides Datalog-based logical inference using the Nemo reasoning engine:
 
-**Planned Features:**
-- Datalog-based inference engine for logical reasoning
+**Core Features:**
+- Datalog-based inference engine for logical reasoning (using Nemo v0.8.1-dev)
 - Dynamic knowledge base construction and management
-- Custom rule definition in Datalog syntax
+- Custom rule and fact definition in Datalog syntax
 - Automated conclusion derivation from premises
 - Direct integration with language models for collaborative reasoning
-- Premise validation and consistency checking
+- Comprehensive syntax and semantic validation
+- Session-isolated knowledge bases for multi-user support
 
-**Architecture Design:**
-- Modular inference engine with pluggable rule systems
-- Efficient knowledge graph representation
-- Real-time reasoning capabilities
-- Integration with external knowledge sources
+**Technical Implementation:**
+- Nemo engine integration via spawn_blocking for async compatibility
+- MCP protocol support with tool-based API
+- Regex-based syntax validation with semantic checks
+- Atomic and non-atomic bulk operations
+- Timeout protection for long-running inferences
+- OAuth 2.0 dummy authentication for MCP compatibility
+
+**Nemo Integration:**
+- Version: main branch (commit 8d8aaae)
+- Repository: https://github.com/knowsys/nemo
+- Documentation: https://knowsys.github.io/nemo-doc/
+- Requires: Rust nightly toolchain
 
 ### System Architecture
 

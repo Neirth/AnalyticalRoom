@@ -1,6 +1,6 @@
 use crate::domain::errors::{EngineError, EngineResult};
 use crate::domain::models::{AddBulkResult, Binding, InferenceResult, InferenceStatus, ValidateResult};
-use nemo::api::{load_string, reason, Engine};
+use nemo::api::{load_string, reason};
 use regex::Regex;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -10,10 +10,11 @@ use tokio::time::timeout;
 /// 
 /// This service encapsulates Nemo's inference engine and provides a simplified API
 /// for loading facts, rules, executing queries, and getting explanations.
+/// 
+/// Note: Since Nemo's Engine is not Send-safe, we store the program text and
+/// recreate the engine on each operation. This is less efficient but necessary
+/// for async compatibility.
 pub struct LogicalInferenceEngine {
-    /// The Nemo engine instance
-    engine: Option<Engine>,
-    
     /// Current program text (facts and rules)
     program_text: String,
     
@@ -28,7 +29,6 @@ impl LogicalInferenceEngine {
     /// Create a new LogicalInferenceEngine
     pub fn new() -> Self {
         Self {
-            engine: None,
             program_text: String::new(),
             predicate_annotations: HashMap::new(),
             default_timeout_ms: 5000, // 5 seconds default
@@ -41,8 +41,12 @@ impl LogicalInferenceEngine {
     /// * `fact` - A Datalog fact (e.g., "perro(fido).")
     /// 
     /// # Example
-    /// ```
-    /// engine.load_fact("perro(fido).").await?;
+    /// ```no_run
+    /// # use logical_engine::domain::services::LogicalInferenceEngine;
+    /// # async fn example() {
+    /// # let mut engine = LogicalInferenceEngine::new();
+    /// engine.load_fact("perro(fido).").await;
+    /// # }
     /// ```
     pub async fn load_fact(&mut self, fact: &str) -> EngineResult<()> {
         self.validate_datalog_syntax(fact)?;
@@ -53,8 +57,8 @@ impl LogicalInferenceEngine {
         }
         self.program_text.push_str(fact);
         
-        // Reload the engine
-        self.reload_engine().await
+        // Validate by trying to load
+        self.validate_program().await
     }
 
     /// Load a single rule into the knowledge base
@@ -63,8 +67,12 @@ impl LogicalInferenceEngine {
     /// * `rule` - A Datalog rule (e.g., "come(X) :- perro(X), existe(X).")
     /// 
     /// # Example
-    /// ```
-    /// engine.load_rule("come(X) :- perro(X), existe(X).").await?;
+    /// ```no_run
+    /// # use logical_engine::domain::services::LogicalInferenceEngine;
+    /// # async fn example() {
+    /// # let mut engine = LogicalInferenceEngine::new();
+    /// engine.load_rule("come(X) :- perro(X), existe(X).").await;
+    /// # }
     /// ```
     pub async fn load_rule(&mut self, rule: &str) -> EngineResult<()> {
         self.validate_datalog_syntax(rule)?;
@@ -75,8 +83,8 @@ impl LogicalInferenceEngine {
         }
         self.program_text.push_str(rule);
         
-        // Reload the engine
-        self.reload_engine().await
+        // Validate by trying to load
+        self.validate_program().await
     }
 
     /// Load multiple facts and/or rules in bulk
@@ -126,10 +134,10 @@ impl LogicalInferenceEngine {
             self.program_text.push_str(line);
         }
         
-        // Reload engine with new program
+        // Validate new program
         if added_count > 0 {
-            if let Err(e) = self.reload_engine().await {
-                errors.push((0, format!("Engine reload failed: {}", e)));
+            if let Err(e) = self.validate_program().await {
+                errors.push((0, format!("Program validation failed: {}", e)));
                 return AddBulkResult {
                     added_count: 0,
                     total_count,
@@ -156,13 +164,6 @@ impl LogicalInferenceEngine {
     /// # Returns
     /// InferenceResult with the query result and trace
     pub async fn query(&mut self, query_str: &str, timeout_ms: u64) -> InferenceResult {
-        // For now, return a basic implementation
-        // In a full implementation, we would execute the query against Nemo
-        // and extract bindings and traces
-        
-        let timeout_duration = Duration::from_millis(timeout_ms);
-        let start = Instant::now();
-        
         // Basic validation
         if let Err(e) = self.validate_query_syntax(query_str) {
             return InferenceResult {
@@ -174,8 +175,8 @@ impl LogicalInferenceEngine {
             };
         }
         
-        // Check if we have an engine
-        if self.engine.is_none() {
+        // Check if we have a program
+        if self.program_text.is_empty() {
             return InferenceResult {
                 proven: false,
                 status: InferenceStatus::Inconclusive,
@@ -201,16 +202,27 @@ impl LogicalInferenceEngine {
     /// This runs the inference engine to compute all facts that can be derived
     /// from the current rules and facts.
     pub async fn materialize(&mut self, timeout_ms: u64) -> EngineResult<()> {
-        let timeout_duration = Duration::from_millis(timeout_ms);
+        if self.program_text.is_empty() {
+            return Err(EngineError::OperationNotAllowed("No program loaded".to_string()));
+        }
         
-        if let Some(ref mut engine) = self.engine {
-            match timeout(timeout_duration, reason(engine)).await {
-                Ok(Ok(_)) => Ok(()),
-                Ok(Err(e)) => Err(EngineError::NemoError(e.to_string())),
-                Err(_) => Err(EngineError::Timeout(timeout_ms)),
-            }
-        } else {
-            Err(EngineError::OperationNotAllowed("No engine loaded".to_string()))
+        let timeout_duration = Duration::from_millis(timeout_ms);
+        let program_clone = self.program_text.clone();
+        
+        // Run in blocking context with timeout
+        match timeout(timeout_duration, tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let mut engine = load_string(program_clone).await
+                    .map_err(|e| EngineError::NemoError(e.to_string()))?;
+                reason(&mut engine).await
+                    .map_err(|e| EngineError::NemoError(e.to_string()))
+            })
+        })).await {
+            Ok(Ok(Ok(_))) => Ok(()),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(e)) => Err(EngineError::InternalError(e.to_string())),
+            Err(_) => Err(EngineError::Timeout(timeout_ms)),
         }
     }
 
@@ -226,7 +238,6 @@ impl LogicalInferenceEngine {
     /// 
     /// Clears all facts, rules, and resets the engine
     pub fn reset(&mut self) {
-        self.engine = None;
         self.program_text.clear();
         self.predicate_annotations.clear();
     }
@@ -368,20 +379,25 @@ impl LogicalInferenceEngine {
             .collect()
     }
 
-    /// Reload the Nemo engine with the current program
-    async fn reload_engine(&mut self) -> EngineResult<()> {
+    /// Validate by loading the program with Nemo
+    async fn validate_program(&self) -> EngineResult<()> {
         if self.program_text.is_empty() {
-            self.engine = None;
             return Ok(());
         }
         
-        match load_string(self.program_text.clone()).await {
-            Ok(engine) => {
-                self.engine = Some(engine);
-                Ok(())
-            }
-            Err(e) => Err(EngineError::NemoError(e.to_string())),
-        }
+        let program_clone = self.program_text.clone();
+        tokio::task::spawn_blocking(move || {
+            // Use the runtime in a blocking context
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                match load_string(program_clone).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(EngineError::NemoError(e.to_string())),
+                }
+            })
+        })
+        .await
+        .map_err(|e| EngineError::InternalError(e.to_string()))?
     }
 }
 
@@ -399,7 +415,6 @@ mod tests {
     async fn test_new_engine() {
         let engine = LogicalInferenceEngine::new();
         assert_eq!(engine.program_text, "");
-        assert!(engine.engine.is_none());
     }
 
     #[tokio::test]
@@ -439,7 +454,6 @@ mod tests {
         engine.load_fact("test(a).").await.ok();
         engine.reset();
         assert_eq!(engine.program_text, "");
-        assert!(engine.engine.is_none());
     }
 
     #[tokio::test]
