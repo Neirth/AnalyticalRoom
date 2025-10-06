@@ -1,0 +1,35 @@
+[package]
+name = "logical_engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0.226", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.47.1", features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "mio",
+    "net",
+    "time",
+    "signal",
+] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+rmcp = { version = "0.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-worker", "schemars"] }
+axum = { version = "0.8", features = ["macros"] }
+async-trait = "0.1"
+schemars = "1.0.4"
+anyhow = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+tower = "0.5.2"
+tower-http = { version = "0.6.6", features = ["cors"] }
+serde_urlencoded = "0.7.1"
+url = "2.5"
+regex = "1.11"
+# Nemo inference engine - using git dependency as recommended
+nemo = { git = "https://github.com/knowsys/nemo", branch = "main" }
+
+[dev-dependencies]
+tokio-test = "0.4"
