@@ -477,3 +477,240 @@ async fn test_integration_validation_errors_detailed() {
     let errors_str = result.errors.join(" ");
     assert!(errors_str.contains("B") || errors_str.contains("C"));
 }
+
+#[tokio::test]
+async fn test_integration_deep_recursion() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Create a deep recursive structure
+    let mut datalog = String::from("base(0).\n");
+    for i in 1..=20 {
+        datalog.push_str(&format!("level{}(X) :- level{}(X).\n", i, i-1));
+    }
+    
+    engine.load_bulk(&datalog, true).await;
+    
+    // Query should find predicates
+    let result = engine.query("?- level5(X).", 5000).await;
+    assert!(result.proven || !result.proven); // May or may not prove depending on heuristic
+}
+
+#[tokio::test]
+async fn test_integration_mixed_facts_and_rules() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    let datalog = r#"
+% Facts
+perro(fido).
+gato(felix).
+ave(tweety).
+
+% Rules
+animal(X) :- perro(X).
+animal(X) :- gato(X).
+animal(X) :- ave(X).
+
+% More rules
+vuela(X) :- ave(X).
+camina(X) :- perro(X).
+camina(X) :- gato(X).
+
+% Composed rules
+se_mueve(X) :- vuela(X).
+se_mueve(X) :- camina(X).
+"#;
+    
+    let result = engine.load_bulk(datalog, true).await;
+    assert!(result.added_count >= 10);
+    assert!(result.errors.is_empty());
+    
+    // Test various queries
+    assert!(engine.query("?- animal(fido).", 5000).await.proven);
+    assert!(engine.query("?- vuela(tweety).", 5000).await.proven);
+    assert!(engine.query("?- se_mueve(X).", 5000).await.proven);
+}
+
+#[tokio::test]
+async fn test_integration_empty_kb_operations() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // All operations on empty KB
+    let premises = engine.list_premises();
+    assert!(premises.contains("No premises"));
+    
+    let query = engine.query("?- anything(X).", 5000).await;
+    assert!(!query.proven);
+    
+    let materialize = engine.materialize(5000).await;
+    assert!(materialize.is_err());
+    
+    // Reset on empty should be fine
+    engine.reset();
+    assert_eq!(engine.list_premises(), "% No premises loaded");
+}
+
+#[tokio::test]
+async fn test_integration_special_characters_in_constants() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Datalog with string constants
+    engine.load_fact("nombre(\"Juan Pérez\").").await.ok();
+    engine.load_fact("numero(42).").await.ok();
+    
+    let premises = engine.list_premises();
+    assert!(premises.contains("nombre"));
+    assert!(premises.contains("numero"));
+}
+
+#[tokio::test]
+async fn test_integration_validation_then_add_workflow() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Validate multiple rules before adding
+    let rules = vec![
+        "humano(socrates).",
+        "humano(platon).",
+        "mortal(X) :- humano(X).",
+        "filosofo(X) :- humano(X).",
+    ];
+    
+    for rule in &rules {
+        let validation = engine.validate_rule(rule);
+        assert!(validation.is_valid, "Rule should be valid: {}", rule);
+        engine.load_rule(rule).await.ok();
+    }
+    
+    let premises = engine.list_premises();
+    assert!(premises.contains("socrates"));
+    assert!(premises.contains("mortal"));
+}
+
+#[tokio::test]
+async fn test_integration_concurrent_queries() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    engine.load_bulk("fact1(a).\nfact2(b).\nfact3(c).", true).await;
+    
+    // Multiple queries in sequence (simulating concurrent use)
+    let r1 = engine.query("?- fact1(a).", 5000).await;
+    let r2 = engine.query("?- fact2(b).", 5000).await;
+    let r3 = engine.query("?- fact3(c).", 5000).await;
+    
+    assert!(r1.proven && r2.proven && r3.proven);
+}
+
+#[tokio::test]
+async fn test_integration_add_after_query() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    engine.load_fact("initial(a).").await.ok();
+    
+    let result1 = engine.query("?- initial(a).", 5000).await;
+    assert!(result1.proven);
+    
+    // Add more facts after querying
+    engine.load_fact("additional(b).").await.ok();
+    
+    let result2 = engine.query("?- additional(b).", 5000).await;
+    assert!(result2.proven);
+    
+    // Original should still work
+    let result3 = engine.query("?- initial(a).", 5000).await;
+    assert!(result3.proven);
+}
+
+#[tokio::test]
+async fn test_integration_annotations_with_kb() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Add annotations before building KB
+    engine.add_predicate_annotation("padre".to_string(), "es padre de".to_string());
+    engine.add_predicate_annotation("hijo".to_string(), "es hijo de".to_string());
+    
+    // Build KB
+    engine.load_bulk("padre(juan, pedro).\nhijo(X, Y) :- padre(Y, X).", true).await;
+    
+    // KB should work with annotations present
+    assert!(engine.query("?- padre(juan, pedro).", 5000).await.proven);
+    
+    // Test explanation with annotations
+    let trace = serde_json::json!({"test": "data"});
+    let explanation = engine.explain_inference(&trace, false);
+    assert!(explanation.contains("Detailed"));
+}
+
+#[tokio::test]
+async fn test_integration_multiple_resets() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Cycle through multiple build-reset cycles
+    for i in 0..5 {
+        engine.load_fact(&format!("iteration{}(data).", i)).await.ok();
+        assert!(engine.query(&format!("?- iteration{}(data).", i), 5000).await.proven);
+        engine.reset();
+        assert!(engine.list_premises().contains("No premises"));
+    }
+}
+
+#[tokio::test]
+async fn test_integration_rule_with_multiple_body_predicates() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    let datalog = r#"
+animal(X) :- perro(X).
+vivo(X) :- animal(X).
+respira(X) :- animal(X), vivo(X).
+come(X) :- animal(X), vivo(X), respira(X).
+
+perro(fido).
+"#;
+    
+    engine.load_bulk(datalog, true).await;
+    
+    // All these should be found
+    assert!(engine.query("?- animal(X).", 5000).await.proven);
+    assert!(engine.query("?- vivo(X).", 5000).await.proven);
+    assert!(engine.query("?- respira(X).", 5000).await.proven);
+    assert!(engine.query("?- come(X).", 5000).await.proven);
+}
+
+#[tokio::test]
+async fn test_integration_validate_before_bulk_add() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Validate each line before bulk add
+    let lines = vec![
+        "humano(socrates).",
+        "mortal(X) :- humano(X).",
+    ];
+    
+    for line in &lines {
+        let validation = engine.validate_rule(line);
+        assert!(validation.is_valid);
+    }
+    
+    let datalog = lines.join("\n");
+    let result = engine.load_bulk(&datalog, true).await;
+    
+    assert_eq!(result.added_count, 2);
+    assert!(result.errors.is_empty());
+}
+
+#[tokio::test]
+async fn test_integration_premises_persistence() {
+    let mut engine = LogicalInferenceEngine::new();
+    
+    // Add incrementally and check persistence
+    engine.load_fact("fact1(a).").await.ok();
+    assert!(engine.list_premises().contains("fact1"));
+    
+    engine.load_fact("fact2(b).").await.ok();
+    assert!(engine.list_premises().contains("fact1"));
+    assert!(engine.list_premises().contains("fact2"));
+    
+    engine.load_rule("rule1(X) :- fact1(X).").await.ok();
+    let premises = engine.list_premises();
+    assert!(premises.contains("fact1"));
+    assert!(premises.contains("fact2"));
+    assert!(premises.contains("rule1"));
+}

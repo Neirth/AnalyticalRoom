@@ -1,8 +1,7 @@
-use crate::domain::models::{InferenceResult, ValidateResult, AddBulkResult};
 use crate::domain::services::logical_inference_engine::LogicalInferenceEngine;
 use rmcp::{
     handler::server::{tool::ToolRouter, wrapper::Parameters},
-    model::{ErrorCode, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
     schemars::JsonSchema,
     tool, tool_handler, tool_router, ErrorData, ServerHandler,
 };
