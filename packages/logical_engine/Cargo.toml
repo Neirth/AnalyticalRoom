@@ -17,7 +17,7 @@ tokio = { version = "1.47.1", features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
-rmcp = { version = "0.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-worker", "schemars"] }
+rmcp = { version = "0.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-worker", "transport-io", "schemars"] }
 axum = { version = "0.8", features = ["macros"] }
 async-trait = "0.1"
 schemars = "1.0.4"
@@ -28,8 +28,10 @@ tower-http = { version = "0.6.6", features = ["cors"] }
 serde_urlencoded = "0.7.1"
 url = "2.5"
 regex = "1.11"
-# Nemo inference engine - using git dependency as recommended
-nemo = { git = "https://github.com/knowsys/nemo", branch = "main" }
+lazy_static = "1.5"
+# Nemo inference engine - pinned to specific commit for reproducible builds
+# Commit 8d8aaae: "Filtered imports (#715)" from 2025-10-08
+nemo = { git = "https://github.com/knowsys/nemo", rev = "8d8aaae" }
 
 [dev-dependencies]
 tokio-test = "0.4"

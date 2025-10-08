@@ -14,7 +14,7 @@ use axum::{
 };
 use tower::ServiceBuilder;
 
-const BIND_ADDRESS: &str = "0.0.0.0:8081";
+const BIND_ADDRESS: &str = "0.0.0.0:8080";
 
 fn main() -> anyhow::Result<()> {
     // Build tokio runtime explicitly
