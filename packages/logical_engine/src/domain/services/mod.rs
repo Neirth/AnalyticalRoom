@@ -1,3 +1,5 @@
-pub mod logical_inference_engine;
+pub mod nemo_worker;
+pub mod logical_inference_service;
 
-pub use logical_inference_engine::LogicalInferenceEngine;
+pub use nemo_worker::*;
+pub use logical_inference_service::*;
