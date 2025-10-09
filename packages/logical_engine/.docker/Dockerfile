@@ -1,5 +1,6 @@
 # ---------- STAGE 1: Build ----------
-FROM rust:1.90-slim-bullseye AS builder
+# Usar Debian 12 (bookworm) para que compile contra libssl3
+FROM rust:1.90-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config libssl-dev build-essential ca-certificates \
@@ -13,6 +14,7 @@ RUN cargo build --release --bin logical_engine
 
 # ---------- STAGE 2: Runtime ----------
 # Usamos distroless para runtime mínimo (no shell, solo binario)
+# Por defecto usa Debian 12 (bookworm) con libssl3
 FROM gcr.io/distroless/cc AS runtime
 
 WORKDIR /app/bin

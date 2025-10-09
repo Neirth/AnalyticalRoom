@@ -1,5 +1,5 @@
 # ---------- STAGE 1: Build ----------
-FROM rust:1.90-slim-bullseye AS builder
+FROM rust:1.90-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config libssl-dev build-essential ca-certificates \
