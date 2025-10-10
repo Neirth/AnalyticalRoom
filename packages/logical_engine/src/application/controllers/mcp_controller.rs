@@ -211,7 +211,7 @@ impl LogicalInferenceServer {
     /// - Predicate names must start with lowercase letter
     /// - Terms can be constants (lowercase) or numbers
     /// - Must end with a period (.)
-    #[tool(description = "LOAD FACT: Add a single Datalog fact to the knowledge base. Facts are atomic statements like 'perro(fido).' or 'edad(juan, 30).'. Predicate names must start with lowercase. Terms can be constants (lowercase) or numbers. Must end with a period. Use this to build your knowledge base with known truths.")]
+    #[tool(description = "LOAD FACT: Add a single Datalog fact to the knowledge base. Facts are atomic statements like 'perro(fido).' or 'edad(juan, 30).'. **BEST PRACTICE**: Load generic rules FIRST to define your framework, THEN load facts as instances. Predicate names must start with lowercase. Terms can be constants (lowercase) or numbers. Must end with a period. Use this to build your knowledge base with known truths after establishing the logical framework.")]
     async fn load_fact(&self, Parameters(request): Parameters<LoadFactRequest>) -> Result<String, ErrorData> {
         let service = self.get_service().await;
         let service = service.lock().await;
@@ -256,7 +256,7 @@ impl LogicalInferenceServer {
     /// - Disjunction (OR): Create multiple rules with same head predicate
     /// - Variables (uppercase with ? prefix) in head must appear in positive body literals (not only in negated literals)
     /// - Must end with a period (.)
-    #[tool(description = "LOAD RULE: Add a Datalog rule to the knowledge base. Rules define logical implications like 'mortal(?X) :- humano(?X).' (all humans are mortal). IMPORTANT: Variables MUST use Nemo syntax with '?' prefix (e.g., ?X, ?Y, ?Z). Format: head :- body1, body2, ... Variables in head must appear in positive body literals. Logical operators: AND (comma), OR (multiple rules), NOT (stratified negation with tilde ~). Negation syntax: `~predicate(?X)` means 'predicate(?X) is not derivable'. Negation must be stratified (no cyclic dependencies through negation). Examples: 'puede_conducir(?X) :- persona(?X), tiene_licencia(?X).' (AND), 'no_volador(?X) :- pajaro(?X), ~puede_volar(?X).' (stratified negation). Use this to define logical relationships and derivation rules.")]
+    #[tool(description = "LOAD RULE: Add a Datalog rule to the knowledge base. Rules define logical implications like 'mortal(?X) :- humano(?X).' (all humans are mortal). **BEST PRACTICE**: Load rules FIRST to define your domain framework, THEN load facts. IMPORTANT: Variables MUST use Nemo syntax with '?' prefix (e.g., ?X, ?Y, ?Z). Format: head :- body1, body2, ... Variables in head must appear in positive body literals. Logical operators: AND (comma), OR (multiple rules), NOT (stratified negation with tilde ~). Negation syntax: `~predicate(?X)` means 'predicate(?X) is not derivable'. Negation must be stratified (no cyclic dependencies through negation). Examples: 'puede_conducir(?X) :- persona(?X), tiene_licencia(?X).' (AND), 'no_volador(?X) :- pajaro(?X), ~puede_volar(?X).' (stratified negation). Use this to define logical relationships and derivation rules.")]
     async fn load_rule(&self, Parameters(request): Parameters<LoadRuleRequest>) -> Result<String, ErrorData> {
         let service = self.get_service().await;
         let service = service.lock().await;
@@ -300,7 +300,7 @@ impl LogicalInferenceServer {
     /// - Atomic mode: if any statement fails, none are applied
     /// - Non-atomic mode: valid statements are applied, invalid ones are reported
     /// - Returns detailed error information per line
-    #[tool(description = "LOAD BULK: Load multiple Datalog statements at once (facts and/or rules). IMPORTANT: Variables MUST use Nemo syntax with '?' prefix (e.g., ?X, ?Y, ?Z). Comments: Use '% comment' on any line - they will be automatically removed. Separate statements with newlines. Empty lines are ignored. Set atomic=true for all-or-nothing (if any fails, none apply). Set atomic=false to apply valid statements and report errors for invalid ones. Returns detailed report with added count, errors per line, and rollback status. Efficient for loading large knowledge bases.")]
+    #[tool(description = "LOAD BULK: Load multiple Datalog statements at once (facts and/or rules). **BEST PRACTICE**: Define rules first (generic framework), then facts (specific instances). IMPORTANT: Variables MUST use Nemo syntax with '?' prefix (e.g., ?X, ?Y, ?Z). Comments: Use '% comment' on any line - they will be automatically removed. Separate statements with newlines. Empty lines are ignored. Set atomic=true for all-or-nothing (if any fails, none apply). Set atomic=false to apply valid statements and report errors for invalid ones. Returns detailed report with added count, errors per line, and rollback status. Efficient for loading large knowledge bases with clear separation between framework (rules) and data (facts).")]
     async fn load_bulk(&self, Parameters(request): Parameters<LoadBulkRequest>) -> Result<String, ErrorData> {
         let service = self.get_service().await;
         let service = service.lock().await;
@@ -717,27 +717,50 @@ impl ServerHandler for LogicalInferenceServer {
                 - Example: `?- perro(?X).` (what are all the dogs?)\n\
                 - Variables (uppercase with ? prefix) get unified with matching values\n\n\
                 ## TYPICAL WORKFLOW\n\n\
-                ### 1. Build Knowledge Base\n\
+                **IMPORTANT**: Follow this recommended order for best results:\n\
+                1. Define the formal framework (generic rules and structure)\n\
+                2. Load specific facts (concrete instances)\n\
+                3. Execute queries\n\n\
+                ### 1. Define the Formal Framework First\n\
                 ```\n\
-                # Load facts (known truths)\n\
+                # STEP 1: Define generic rules WITHOUT specific facts\n\
+                # This establishes the logical framework of your domain\n\
+                \n\
+                # Define what it means to be mortal\n\
+                load_rule('mortal(?X) :- humano(?X).')\n\
+                \n\
+                # Define what it means to be a philosopher\n\
+                load_rule('filosofo(?X) :- humano(?X), sabio(?X).')\n\
+                \n\
+                # Define transitive relationships\n\
+                load_rule('ancestro(?X, ?Y) :- padre(?X, ?Y).')\n\
+                load_rule('ancestro(?X, ?Z) :- padre(?X, ?Y), ancestro(?Y, ?Z).')\n\
+                ```\n\n\
+                ### 2. Load Specific Facts\n\
+                ```\n\
+                # STEP 2: Now add concrete instances that use the framework\n\
+                \n\
+                # Load facts about specific individuals\n\
                 load_fact('humano(socrates).')\n\
                 load_fact('humano(platon).')\n\
                 load_fact('humano(aristoteles).')\n\
-                \n\
-                # Load rules (logical implications)\n\
-                load_rule('mortal(?X) :- humano(?X).')\n\
-                load_rule('filosofo(?X) :- humano(?X), sabio(?X).')\n\
+                load_fact('sabio(socrates).')\n\
+                load_fact('sabio(platon).')\n\
                 ```\n\n\
-                ### 2. Query the Knowledge Base\n\
+                ### 3. Query the Knowledge Base\n\
                 ```\n\
+                # STEP 3: Ask questions using the framework and facts\n\
+                \n\
                 # Ask specific questions\n\
                 query('?- mortal(socrates).') → TRUE (all humans are mortal)\n\
+                query('?- filosofo(socrates).') → TRUE (Socrates is human and wise)\n\
                 query('?- perro(socrates).') → FALSE/INCONCLUSIVE (not a dog)\n\
                 \n\
                 # Find all solutions with variables\n\
                 query('?- humano(?X).') → ?X = socrates, platon, aristoteles\n\
+                query('?- filosofo(?X).') → ?X = socrates, platon\n\
                 ```\n\n\
-                ### 3. Validate and Inspect\n\
+                ### 4. Validate and Inspect\n\
                 ```\n\
                 # Check rule before loading\n\
                 validate_rule('ancestro(?X, ?Z) :- padre(?X, ?Y), ancestro(?Y, ?Z).')\n\
@@ -745,7 +768,7 @@ impl ServerHandler for LogicalInferenceServer {
                 # See what's loaded\n\
                 list_premises()\n\
                 ```\n\n\
-                ### 4. Optimize and Explain\n\
+                ### 5. Optimize and Explain\n\
                 ```\n\
                 # Precompute all derivable facts\n\
                 materialize()\n\
@@ -755,6 +778,19 @@ impl ServerHandler for LogicalInferenceServer {
                 add_predicate_annotation('mortal', 'is mortal')\n\
                 explain_inference(trace, short=false)\n\
                 ```\n\n\
+                ## RECOMMENDED WORKFLOW PRINCIPLE\n\n\
+                **Framework-First Approach**: Always define the generic logical framework (rules and relationships) \n\
+                BEFORE loading specific instances (facts). This approach:\n\
+                - Creates a reusable knowledge structure\n\
+                - Makes the domain model explicit and clear\n\
+                - Separates domain logic from data\n\
+                - Enables better validation and understanding\n\
+                - Follows declarative programming best practices\n\n\
+                **Anti-Pattern to Avoid**: Do NOT mix ad-hoc fact definitions with implicit rules. \n\
+                Instead of loading facts without first establishing the framework, always:\n\
+                1. Define generic predicates and their relationships (rules)\n\
+                2. Then instantiate specific cases (facts)\n\
+                3. Finally query the structured knowledge base\n\n\
                 ## TOOLS REFERENCE\n\n\
                 ### Knowledge Base Construction\n\
                 - **load_fact**: Add a single fact\n\
@@ -773,12 +809,19 @@ impl ServerHandler for LogicalInferenceServer {
                 - **explain_inference**: Convert trace to natural language\n\n\
                 ## ADVANCED FEATURES\n\n\
                 ### Recursive Rules\n\
-                Datalog supports recursion for transitive relationships:\n\
+                Datalog supports recursion for transitive relationships.\n\
+                **Framework-First Example**:\n\
                 ```\n\
-                padre(juan, maria).\n\
-                padre(maria, pedro).\n\
+                % Step 1: Define generic recursive framework\n\
                 ancestro(?X, ?Y) :- padre(?X, ?Y).\n\
                 ancestro(?X, ?Z) :- padre(?X, ?Y), ancestro(?Y, ?Z).\n\
+                \n\
+                % Step 2: Add specific facts\n\
+                padre(juan, maria).\n\
+                padre(maria, pedro).\n\
+                \n\
+                % Step 3: Query\n\
+                ?- ancestro(juan, pedro). % TRUE (juan -> maria -> pedro)\n\
                 ```\n\n\
                 ### Complex Queries\n\
                 Combine multiple conditions:\n\
@@ -793,22 +836,30 @@ impl ServerHandler for LogicalInferenceServer {
                 ```\n\n\
                 ### Bulk Loading with Comments\n\
                 ```\n\
+                % RECOMMENDED: Define framework (rules) first, then facts\n\
                 load_bulk(\n\
-                  '% Knowledge base about ancient philosophers\\n\
+                  '% Domain Framework - Generic Rules\\n\
+                   mortal(?X) :- humano(?X).\\n\
+                   filosofo(?X) :- humano(?X), sabio(?X).\\n\
+                   % Specific Instances - Facts\\n\
                    humano(socrates).\\n\
                    humano(platon).\\n\
-                   % Rules\\n\
-                   mortal(X) :- humano(X).',\n\
+                   sabio(socrates).\\n\
+                   sabio(platon).',\n\
                   atomic=true\n\
                 )\n\
                 ```\n\n\
                 ## BEST PRACTICES\n\n\
-                1. **Start Simple**: Load a few facts, test with queries, then add complexity\n\
+                1. **Framework-First**: ALWAYS define generic rules BEFORE loading specific facts\n\
+                   - Define the domain structure with rules first\n\
+                   - Then instantiate with concrete facts\n\
+                   - This separates logic from data and creates reusable models\n\
                 2. **Validate First**: Use validate_rule before load_rule to catch errors early\n\
                 3. **Use Annotations**: Add predicate_annotation for better explanations\n\
                 4. **Atomic Bulk Loads**: Use atomic=true when loading related facts/rules\n\
                 5. **List Premises**: Regularly check what's loaded with list_premises\n\
-                6. **Materialize for Performance**: Run materialize before many queries\n\n\
+                6. **Materialize for Performance**: Run materialize before many queries\n\
+                7. **Avoid Ad-hoc Attributes**: Don't create situation-specific predicates; use generic framework\n\n\
                 ## COMMON PATTERNS\n\n\
                 ### Transitive Relationships\n\
                 ```\n\
