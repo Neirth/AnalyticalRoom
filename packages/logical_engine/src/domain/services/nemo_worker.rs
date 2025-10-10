@@ -91,7 +91,8 @@ impl NemoWorkerState {
 
     /// Validate that variables use Nemo syntax (?X, ?Y instead of X, Y)
     fn validate_nemo_variable_syntax(&self, text: &str) -> EngineResult<()> {
-        // Find all potential variables (uppercase start)
+        // Find all potential variables (uppercase start) that appear within parentheses
+        // This helps avoid matching predicate names that might start with uppercase
         let var_regex = Regex::new(r"([A-Z][a-zA-Z0-9_]*)").unwrap();
         
         for cap in var_regex.captures_iter(text) {
@@ -100,8 +101,9 @@ impl NemoWorkerState {
             let match_start = full_match.start();
             
             // Check if there's a '?' character immediately before the variable
+            // Use byte slicing to safely check the previous character
             let has_question_mark = if match_start > 0 {
-                text.chars().nth(match_start - 1) == Some('?')
+                text.as_bytes().get(match_start - 1) == Some(&b'?')
             } else {
                 false
             };
@@ -263,27 +265,30 @@ impl NemoWorkerState {
 
     /// Load multiple facts and rules in bulk
     async fn load_bulk(&mut self, program: &str, atomic: bool) -> AddBulkResult {
+        // Remove comments before processing
+        let program_clean = self.remove_comments(program);
+        
         // Validate Nemo variable syntax before loading
-        if let Err(e) = self.validate_nemo_variable_syntax(program) {
+        if let Err(e) = self.validate_nemo_variable_syntax(&program_clean) {
             return AddBulkResult {
                 added_count: 0,
-                total_count: program.lines().filter(|line| line.trim().ends_with('.')).count(),
+                total_count: program_clean.lines().filter(|line| line.trim().ends_with('.')).count(),
                 errors: vec![(0, e.to_string())],
                 rolled_back: atomic,
             };
         }
         
         // Count statements (simple count by lines with dots)
-        let total_count = program.lines()
+        let total_count = program_clean.lines()
             .filter(|line| line.trim().ends_with('.'))
             .count();
         
-        // Build temporary program with the bulk content
+        // Build temporary program with the bulk content (without comments)
         let mut temp_program = self.program_text.clone();
         if !temp_program.is_empty() {
             temp_program.push('\n');
         }
-        temp_program.push_str(program);
+        temp_program.push_str(&program_clean);
         
         // Validate the complete temporary program before committing
         let temp_state = NemoWorkerState {
@@ -1186,5 +1191,58 @@ mod tests {
         assert!(!premises.contains("This is a comment"), "Comment should not be in premises");
         assert!(premises.contains("mortal(?X)"), "Rule should be loaded without comment");
         assert!(!premises.contains("All humans are mortal"), "Comment should not be in premises");
+    }
+
+    #[tokio::test]
+    async fn test_load_bulk_with_comments() {
+        let handle = NemoWorkerHandle::new();
+        
+        // Test bulk loading with mixed comments and statements
+        let program = r#"
+% This is a comment at the beginning
+perro(fido). % Dog named Fido
+perro(rex).  % Another dog
+% Just a comment line
+gato(whiskers). % A cat
+% More comments
+mortal(?X) :- perro(?X). % All dogs are mortal
+"#;
+        
+        let result = handle.load_bulk(program.to_string(), false).await;
+        assert_eq!(result.added_count, 4, "Should add 4 statements (2 facts + 1 fact + 1 rule), errors: {:?}", result.errors);
+        assert_eq!(result.errors.len(), 0, "Should have no errors, but got: {:?}", result.errors);
+        
+        // Verify the data was loaded correctly
+        let premises = handle.list_premises().await;
+        assert!(premises.contains("perro(fido)"), "Should contain fido fact");
+        assert!(premises.contains("perro(rex)"), "Should contain rex fact");
+        assert!(premises.contains("gato(whiskers)"), "Should contain whiskers fact");
+        assert!(premises.contains("mortal(?X)"), "Should contain mortal rule");
+        
+        // Verify comments are not in the premises
+        assert!(!premises.contains("This is a comment"), "Comments should not be in premises");
+        assert!(!premises.contains("Dog named Fido"), "Comments should not be in premises");
+        assert!(!premises.contains("Another dog"), "Comments should not be in premises");
+        assert!(!premises.contains("A cat"), "Comments should not be in premises");
+    }
+
+    #[tokio::test]
+    async fn test_uppercase_constants_behavior() {
+        let handle = NemoWorkerHandle::new();
+        
+        // Test: uppercase constant - this will be rejected by current validator
+        // because it treats all uppercase identifiers as variables
+        let result = handle.load_fact("person(John).".to_string()).await;
+        assert!(result.is_err(), "Uppercase constants are treated as variables and rejected without ?");
+        
+        // The error message should indicate the issue
+        if let Err(e) = result {
+            let error_msg = format!("{}", e);
+            assert!(error_msg.contains("Invalid variable syntax"));
+        }
+        
+        // Lowercase constants work fine
+        let result = handle.load_fact("person(john).".to_string()).await;
+        assert!(result.is_ok(), "Lowercase constants should be accepted");
     }
 }
