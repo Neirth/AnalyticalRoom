@@ -29,6 +29,7 @@ serde_urlencoded = "0.7.1"
 url = "2.5"
 regex = "1.11"
 lazy_static = "1.5"
+clap = { version = "4.5", features = ["derive"] }
 # Nemo inference engine - pinned to specific commit for reproducible builds
 # Commit 8d8aaae: "Filtered imports (#715)" from 2025-10-08
 nemo = { git = "https://github.com/knowsys/nemo", rev = "8d8aaae" }

@@ -18,7 +18,7 @@ tokio = { version = "1.47.1", features = [
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
-rmcp = { version = "0.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-worker", "schemars"] }
+rmcp = { version = "0.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-worker", "transport-io", "schemars"] }
 axum = { version = "0.8", features = ["macros"] }
 async-trait = "0.1"
 schemars = "1.0.4"
@@ -28,6 +28,7 @@ tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["cors"] }
 serde_urlencoded = "0.7.1"
 url = "2.5"
+clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

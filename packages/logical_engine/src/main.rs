@@ -9,22 +9,94 @@ use logical_engine::application::controllers::{
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService, session::local::LocalSessionManager,
 };
+use rmcp::transport::stdio;
+use rmcp::serve_server;
 use axum::{
     routing::{get, post},
 };
 use tower::ServiceBuilder;
+use clap::{Parser, Subcommand};
 
-const BIND_ADDRESS: &str = "0.0.0.0:8080";
+const DEFAULT_HOST: &str = "0.0.0.0";
+const DEFAULT_PORT: u16 = 8080;
 
-fn main() -> anyhow::Result<()> {
-    // Build tokio runtime explicitly
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async_main())
+#[derive(Parser)]
+#[command(name = "logical_engine")]
+#[command(about = "Logical Engine MCP Server", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+    
+    /// Host address to bind to (default: 0.0.0.0)
+    #[arg(long, default_value = DEFAULT_HOST)]
+    host: String,
+    
+    /// Port to bind to (default: 8080)
+    #[arg(long, default_value_t = DEFAULT_PORT)]
+    port: u16,
 }
 
-async fn async_main() -> anyhow::Result<()> {
+#[derive(Subcommand)]
+enum Commands {
+    /// Run server in stdio mode
+    Stdio,
+    /// Run server in HTTP mode (default)
+    Http {
+        /// Host address to bind to
+        #[arg(long)]
+        host: Option<String>,
+        
+        /// Port to bind to
+        #[arg(long)]
+        port: Option<u16>,
+    },
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    
+    // Determine the mode and configuration
+    let (mode, host, port) = match cli.command {
+        Some(Commands::Stdio) => ("stdio", String::new(), 0),
+        Some(Commands::Http { host: cmd_host, port: cmd_port }) => {
+            ("http", cmd_host.unwrap_or(cli.host.clone()), cmd_port.unwrap_or(cli.port))
+        }
+        None => ("http", cli.host, cli.port), // Default to HTTP mode
+    };
+    
+    if mode == "stdio" {
+        // Run in stdio mode
+        run_stdio_mode()
+    } else {
+        // Run in HTTP mode
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(run_http_mode(&host, port))
+    }
+}
+
+fn run_stdio_mode() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    
+    rt.block_on(async {
+        println!("🚀 Logical Inference MCP Server starting in stdio mode");
+        
+        let server = LogicalInferenceServer::new();
+        let transport = stdio();
+        
+        let running_service = serve_server(server, transport).await?;
+        let _ = running_service.waiting().await;
+        
+        Ok(())
+    })
+}
+
+async fn run_http_mode(host: &str, port: u16) -> anyhow::Result<()> {
+    let bind_address = format!("{}:{}", host, port);
+    
     println!("🔐 Initializing Dummy Authentication System");
     println!("   - Always allows access (dummy auth for MCP compatibility)");
     println!("   - Real security via MCP session isolation");
@@ -67,10 +139,10 @@ async fn async_main() -> anyhow::Result<()> {
         .merge(health_routes)
         .route("/", get(root_handler));
 
-    let tcp_listener = tokio::net::TcpListener::bind(BIND_ADDRESS).await?;
+    let tcp_listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
-    println!("🚀 Logical Inference MCP Server starting on {}", BIND_ADDRESS);
-    println!("📡 MCP endpoint: http://{}/mcp", BIND_ADDRESS);
+    println!("🚀 Logical Inference MCP Server starting on {}", bind_address);
+    println!("📡 MCP endpoint: http://{}/mcp", bind_address);
     println!("🔑 Auth endpoints:");
     println!("   - POST /oauth/token - Get authentication token");
     println!("   - GET  /oauth/validate - Validate token");
@@ -79,7 +151,7 @@ async fn async_main() -> anyhow::Result<()> {
     println!("🔍 Discovery endpoints:");
     println!("   - GET  /.well-known/oauth-authorization-server");
     println!("   - GET  /.well-known/oauth-protected-resource/mcp");
-    println!("🏥 Health check: http://{}/health", BIND_ADDRESS);
+    println!("🏥 Health check: http://{}/health", bind_address);
     println!("🧠 Nemo engine: main branch (git)");
 
     // Apply the CORS layer to all routes
