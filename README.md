@@ -66,12 +66,38 @@ cargo build -p logical_engine --release
 ```
 
 ### Run the Services
+
+Both MCP servers support multiple transport modes via command-line arguments:
+
+#### HTTP Mode (Default)
 ```bash
-# Start Deep Analytics MCP Server
+# Run with default settings (HTTP on 0.0.0.0:8080)
 cargo run -p deep_analytics
 
-# Start Logical Engine MCP Server (coming soon)
-cargo run -p logical_engine
+# Run with custom host and port
+cargo run -p deep_analytics -- --host 127.0.0.1 --port 9090
+
+# Use the http subcommand explicitly with custom settings
+cargo run -p deep_analytics -- http --host 0.0.0.0 --port 8888
+```
+
+#### STDIO Mode
+```bash
+# Run in stdio mode for direct MCP communication
+cargo run -p deep_analytics -- stdio
+
+# Run logical_engine in stdio mode
+cargo run -p logical_engine -- stdio
+```
+
+#### CLI Options
+```bash
+# View all available options
+cargo run -p deep_analytics -- --help
+
+# View help for a specific command
+cargo run -p deep_analytics -- http --help
+```
 ```
 
 ## Project Structure
@@ -175,18 +201,22 @@ The `logical_engine` package provides Datalog-based logical inference using the 
 
 ### Environment Variables
 ```bash
-export BIND_ADDRESS="0.0.0.0:8080"
 export DATABASE_URL="memory"
 export RUST_LOG="info"
 ```
+
+**Note:** With the new CLI argument support, `BIND_ADDRESS` is no longer used. Use `--host` and `--port` command-line arguments instead.
 
 ### Development Workflow
 ```bash
 # Run with auto-reload during development
 cargo watch -x "run -p deep_analytics"
 
-# Enable detailed logging
-RUST_LOG=debug cargo run -p deep_analytics
+# Enable detailed logging with custom port
+RUST_LOG=debug cargo run -p deep_analytics -- --port 8888
+
+# Run in stdio mode for testing
+cargo run -p deep_analytics -- stdio
 
 # Run specific test suites
 cargo test -p deep_analytics
