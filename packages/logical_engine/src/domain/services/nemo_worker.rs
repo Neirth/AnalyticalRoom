@@ -1245,4 +1245,37 @@ mortal(?X) :- perro(?X). % All dogs are mortal
         let result = handle.load_fact("person(john).".to_string()).await;
         assert!(result.is_ok(), "Lowercase constants should be accepted");
     }
+
+    #[tokio::test]
+    async fn test_realistic_bulk_load_scenario() {
+        let handle = NemoWorkerHandle::new();
+        
+        // Realistic scenario: Loading a knowledge base with comments
+        let program = r#"
+% Define the animal taxonomy
+% Facts about animals
+perro(fido).     % Fido is a dog
+perro(rex).      % Rex is also a dog
+gato(whiskers).  % Whiskers is a cat
+gato(felix).     % Felix is another cat
+
+% Define rules about animals
+% All dogs are mammals
+mamifero(?X) :- perro(?X).
+% All cats are mammals
+mamifero(?X) :- gato(?X).
+
+% Define mortality
+% All mammals are mortal
+mortal(?X) :- mamifero(?X).
+"#;
+        
+        let result = handle.load_bulk(program.to_string(), false).await;
+        assert_eq!(result.errors.len(), 0, "Should have no errors, but got: {:?}", result.errors);
+        assert_eq!(result.added_count, 7, "Should have added 7 statements (4 facts + 3 rules)");
+        
+        // Query to verify the data was loaded correctly
+        let query_result = handle.query("?- mortal(fido).".to_string(), 5000).await;
+        assert!(query_result.proven, "Fido should be proven mortal through the rule chain");
+    }
 }
